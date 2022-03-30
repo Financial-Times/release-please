@@ -134,6 +134,7 @@ export interface ManifestOptions {
   releaseLabels?: string[];
   draft?: boolean;
   prerelease?: boolean;
+  pinPrereleases?: boolean;
   draftPullRequest?: boolean;
   groupPullRequestTitlePattern?: string;
 }
@@ -163,6 +164,7 @@ export interface ManifestConfig extends ReleaserConfigJson {
   plugins?: PluginType[];
   'separate-pull-requests'?: boolean;
   'group-pull-request-title-pattern'?: string;
+  'pin-prereleases'?: boolean;
 }
 // path => version
 export type ReleasedVersions = Record<string, Version>;
@@ -206,6 +208,7 @@ export class Manifest {
   private lastReleaseSha?: string;
   private draft?: boolean;
   private prerelease?: boolean;
+  private pinPrereleases?: boolean;
   private draftPullRequest?: boolean;
   private groupPullRequestTitlePattern?: string;
 
@@ -260,6 +263,7 @@ export class Manifest {
     this.bootstrapSha = manifestOptions?.bootstrapSha;
     this.lastReleaseSha = manifestOptions?.lastReleaseSha;
     this.draft = manifestOptions?.draft;
+    this.pinPrereleases = manifestOptions?.pinPrereleases;
     this.draftPullRequest = manifestOptions?.draftPullRequest;
     this.groupPullRequestTitlePattern =
       manifestOptions?.groupPullRequestTitlePattern;
@@ -559,6 +563,7 @@ export class Manifest {
         github: this.github,
         targetBranch: this.targetBranch,
         repositoryConfig: this.repositoryConfig,
+        pinPrereleases: this.pinPrereleases,
       })
     );
 
@@ -1104,6 +1109,7 @@ async function parseConfig(
     labels: configLabel === undefined ? undefined : [configLabel],
     releaseLabels:
       configReleaseLabel === undefined ? undefined : [configReleaseLabel],
+    pinPrereleases: config['pin-prereleases'],
   };
   return {config: repositoryConfig, options: manifestOptions};
 }

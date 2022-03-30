@@ -335,6 +335,10 @@ export class NodeWorkspace extends WorkspacePlugin<Package> {
   protected packageNameFromPackage(pkg: Package): string {
     return pkg.name;
   }
+
+  protected packageVersionFromPackage(pkg: Package): Version {
+    return Version.parse(pkg.version);
+  }
 }
 
 function getChangelogDepsNotes(original: Package, updated: Package): string {

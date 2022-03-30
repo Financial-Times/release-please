@@ -232,6 +232,7 @@ interface PluginFactoryOptions {
 
   // workspace options
   updateAllPackages?: boolean;
+  pinPrereleases?: boolean;
 }
 
 export function buildPlugin(options: PluginFactoryOptions): ManifestPlugin {

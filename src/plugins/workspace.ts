@@ -27,11 +27,19 @@ export interface DependencyNode<T> {
 
 export interface WorkspacePluginOptions {
   updateAllPackages?: boolean;
+  pinPrereleases?: boolean;
 }
 
 interface AllPackages<T> {
   allPackages: T[];
   candidatesByPackage: Record<string, CandidateReleasePullRequest>;
+}
+
+type PinnedMap<T> = Map<T, Version | undefined>;
+
+interface PackageData {
+  name: string;
+  version: Version;
 }
 
 /**
@@ -47,6 +55,7 @@ interface AllPackages<T> {
  */
 export abstract class WorkspacePlugin<T> extends ManifestPlugin {
   private updateAllPackages: boolean;
+  private pinPrereleases: boolean;
   constructor(
     github: GitHub,
     targetBranch: string,
@@ -55,6 +64,7 @@ export abstract class WorkspacePlugin<T> extends ManifestPlugin {
   ) {
     super(github, targetBranch, repositoryConfig);
     this.updateAllPackages = options.updateAllPackages ?? false;
+    this.pinPrereleases = options.pinPrereleases ?? false;
   }
   async run(
     candidates: CandidateReleasePullRequest[]
@@ -89,21 +99,35 @@ export abstract class WorkspacePlugin<T> extends ManifestPlugin {
     logger.info(`Building dependency graph for ${allPackages.length} packages`);
     const graph = await this.buildGraph(allPackages);
 
-    const packageNamesToUpdate = this.updateAllPackages
-      ? allPackages.map(this.packageNameFromPackage)
-      : Object.keys(candidatesByPackage);
-    const orderedPackages = this.buildGraphOrder(graph, packageNamesToUpdate);
-    logger.info(`Updating ${orderedPackages.length} packages`);
+    const packagesToUpdate = this.updateAllPackages
+      ? allPackages.map(pkg => ({
+          name: this.packageNameFromPackage(pkg),
+          version: this.packageVersionFromPackage(pkg),
+        }))
+      : Object.entries(candidatesByPackage).map(([name, pr]) => ({
+          name,
+          version: pr.pullRequest.version!,
+        }));
+    const orderedPackages = this.buildGraphOrder(graph, packagesToUpdate);
+    logger.info(`Updating ${orderedPackages.size} packages`);
 
     const updatedVersions: VersionsMap = new Map();
-    for (const pkg of orderedPackages) {
+    for (const [pkg, pinnedVersion] of orderedPackages) {
       const packageName = this.packageNameFromPackage(pkg);
       logger.debug(`package: ${packageName}`);
       const existingCandidate = candidatesByPackage[packageName];
       if (existingCandidate) {
         const version = existingCandidate.pullRequest.version!;
+        if (pinnedVersion) {
+          throw new Error(
+            `${packageName} version ${version} from release-please clashes with pinned version ${pinnedVersion}`
+          );
+        }
         logger.debug(`version: ${version} from release-please`);
         updatedVersions.set(packageName, version);
+      } else if (pinnedVersion) {
+        logger.debug(`version: ${pinnedVersion} pinned version`);
+        updatedVersions.set(packageName, pinnedVersion);
       } else {
         const version = this.bumpVersion(pkg);
         logger.debug(`version: ${version} forced bump`);
@@ -112,7 +136,7 @@ export abstract class WorkspacePlugin<T> extends ManifestPlugin {
     }
 
     let newCandidates: CandidateReleasePullRequest[] = [];
-    for (const pkg of orderedPackages) {
+    for (const pkg of orderedPackages.keys()) {
       const packageName = this.packageNameFromPackage(pkg);
       const existingCandidate = candidatesByPackage[packageName];
       if (existingCandidate) {
@@ -225,6 +249,13 @@ export abstract class WorkspacePlugin<T> extends ManifestPlugin {
   protected abstract packageNameFromPackage(pkg: T): string;
 
   /**
+   * Given a package, return the package version of the package.
+   * @param {T} pkg The package definition.
+   * @returns {Version} The package version.
+   */
+  protected abstract packageVersionFromPackage(pkg: T): Version;
+
+  /**
    * Amend any or all in-scope candidates once all other processing has occured.
    *
    * This gives the workspace plugin once last chance to tweak the pull-requests
@@ -270,50 +301,53 @@ export abstract class WorkspacePlugin<T> extends ManifestPlugin {
   /**
    * Determine all the packages which need to be updated and sort them.
    * @param {DependencyGraph<T>} graph The graph of package => packages it depends on
-   * @param {string} packageNamesToUpdate Names of the packages which are already
+   * @param {string} packagesToUpdate Names of the packages which are already
    *   being updated.
    */
   protected buildGraphOrder(
     graph: DependencyGraph<T>,
-    packageNamesToUpdate: string[]
-  ): T[] {
+    packagesToUpdate: PackageData[]
+  ): PinnedMap<T> {
     // invert the graph so it's dependency name => packages that depend on it
     const dependentGraph = this.invertGraph(graph);
-    const visited: Set<T> = new Set();
+    const visited: PinnedMap<T> = new Map();
 
     // we're iterating the `Map` in insertion order (as per ECMA262), but
     // that does not reflect any particular traversal of the graph, so we
     // visit all nodes, opportunistically short-circuiting leafs when we've
     // already visited them.
-    for (const name of packageNamesToUpdate) {
-      this.visitPostOrder(dependentGraph, name, visited, []);
+    for (const pkg of packagesToUpdate) {
+      this.visitPostOrder(
+        dependentGraph,
+        pkg,
+        visited,
+        [],
+        this.pinPrereleases && pkg.version.preRelease ? pkg.version : undefined
+      );
     }
 
-    return Array.from(visited).sort((a, b) =>
-      this.packageNameFromPackage(a).localeCompare(
-        this.packageNameFromPackage(b)
-      )
-    );
+    return visited;
   }
 
   private visitPostOrder(
     graph: DependencyGraph<T>,
-    name: string,
-    visited: Set<T>,
-    path: string[]
+    pkg: PackageData,
+    visited: PinnedMap<T>,
+    path: string[],
+    pinnedVersion?: Version
   ) {
-    if (path.indexOf(name) !== -1) {
+    if (path.indexOf(pkg.name) !== -1) {
       throw new Error(
-        `found cycle in dependency graph: ${path.join(' -> ')} -> ${name}`
+        `found cycle in dependency graph: ${path.join(' -> ')} -> ${pkg.name}`
       );
     }
-    const node = graph.get(name);
+    const node = graph.get(pkg.name);
     if (!node) {
-      logger.warn(`Didn't find node: ${name} in graph`);
+      logger.warn(`Didn't find node: ${pkg.name} in graph`);
       return;
     }
 
-    const nextPath = [...path, name];
+    const nextPath = [...path, pkg.name];
 
     for (const depName of node.deps) {
       const dep = graph.get(depName);
@@ -322,16 +356,39 @@ export abstract class WorkspacePlugin<T> extends ManifestPlugin {
         return;
       }
 
-      this.visitPostOrder(graph, depName, visited, nextPath);
+      this.visitPostOrder(
+        graph,
+        {
+          name: this.packageNameFromPackage(dep.value),
+          version: this.packageVersionFromPackage(dep.value),
+        },
+        visited,
+        nextPath,
+        pinnedVersion
+      );
     }
 
     if (!visited.has(node.value)) {
       logger.debug(
-        `marking ${name} as visited and adding ${this.packageNameFromPackage(
+        `marking ${
+          pkg.name
+        } as visited and adding ${this.packageNameFromPackage(
           node.value
         )} to order`
       );
-      visited.add(node.value);
+      visited.set(node.value, path.length > 0 ? pinnedVersion : undefined);
+    } else {
+      const currentPin = visited.get(node.value);
+      if (
+        currentPin !== undefined &&
+        pinnedVersion !== undefined &&
+        currentPin !== pinnedVersion
+      ) {
+        throw new Error(
+          `two different versions for ${pkg.name}, ${currentPin} and ${pinnedVersion}, need to be pinned`
+        );
+      }
+      visited.set(node.value, currentPin ?? pinnedVersion);
     }
   }
 }
