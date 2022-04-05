@@ -84,6 +84,9 @@ export class CommitSplit {
   // split(commits: Commit[]): Record<string, Commit[]>
   split<T extends Commit>(commits: T[]): Record<string, T[]> {
     const splitCommits: Record<string, T[]> = {};
+    for (const pkgName of this.packagePaths ?? []) {
+      splitCommits[pkgName] = [];
+    }
     commits.forEach(commit => {
       if (commit.files === undefined) {
         throw new Error(
