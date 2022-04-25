@@ -311,7 +311,6 @@ export class NodeWorkspace extends WorkspacePlugin<Package> {
         ...(packageJson.dependencies ?? {}),
         ...(packageJson.devDependencies ?? {}),
         ...(packageJson.optionalDependencies ?? {}),
-        ...(packageJson.peerDependencies ?? {}),
       });
       const workspaceDeps = allDeps.filter(dep =>
         workspacePackageNames.has(dep)
@@ -339,15 +338,10 @@ export class NodeWorkspace extends WorkspacePlugin<Package> {
 
 function getChangelogDepsNotes(original: Package, updated: Package): string {
   let depUpdateNotes = '';
-  type DT =
-    | 'dependencies'
-    | 'devDependencies'
-    | 'peerDependencies'
-    | 'optionalDependencies';
+  type DT = 'dependencies' | 'devDependencies' | 'optionalDependencies';
   const depTypes: DT[] = [
     'dependencies',
     'devDependencies',
-    'peerDependencies',
     'optionalDependencies',
   ];
   const updates: Map<DT, string[]> = new Map();
